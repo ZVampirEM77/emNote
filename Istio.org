@@ -1,0 +1,181 @@
+* Istio
+
+** Deploy Istio
+   
+    Istio 的部署流程主要分为两部分
+
+    - 第一部分包括安装 CLI 工具，主要用来部署和管理 Istio 后端服务；
+    - 第二部分为配置 Kubernetes 集群以支持 Istio;
+      
+
+*** Install CLI tooling
+    
+     执行如下命令以安装 Istio 1.0.0 release 版本
+     #+BEGIN_SRC sh
+     curl -L https://git.io/getLatestIstio | ISTIO_VERSION=1.0.0 sh -
+     #+END_SRC
+     
+     增加 bin 目录到 PATH 环境变量中
+     
+     #+BEGIN_SRC sh
+     export PATH="$PATH:/root/istio-1.0.0/bin"
+     cd /root/istio-1.0.0
+     #+END_SRC
+     
+
+*** Configure Istio CRD
+    
+     Istio 通过 CRD (Custom Resource Definitions) 实现了针对 Kubernetes 的扩展，
+     通过 applying crds.yaml 来部署扩展
+     
+     #+BEGIN_SRC sh
+     kubectl apply -f install/kubernetes/helm/istio/templates/crds.yaml -n istio-system
+     #+END_SRC
+     
+      
+*** Install Istio with default mutual TLS authentication
+    
+     使用 istio-demo-auth.yaml 来安装 Istio 并默认启用 mutual TLS 验证
+     
+     #+BEGIN_SRC sh
+     kubectl apply -f install/kubernetes/istio-demo-auth.yaml
+     #+END_SRC
+     
+     这将会部署 Pilot, Mixer, Ingress-Controller, Egress-Controller 和 Istio CA
+     (Certificate Authority)
+     
+
+*** Check Status
+    
+     #+BEGIN_SRC sh
+     kubectl get pods -n istio-system
+     #+END_SRC
+     
+     直到所有 pods 状态均为 running 或是 completed
+     
+
+*** Deploy Katacoda Service
+    
+     #+BEGIN_SRC sh
+     kubectl apply -f /root/katacoda.yaml
+     service/katacoda-servicegraph created
+     service/katacoda-grafana created
+     service/katacoda-jaeger-query created
+     service/katacoda-prometheus created
+     service/istio-ingressgateway configured
+     #+END_SRC
+     
+     可以通过
+
+     #+BEGIN_SRC sh
+     kubectl get svc -n istio-system
+     #+END_SRC
+     
+     来查看当前启动的所有服务
+     
+** Istio Architecture
+   
+    - Pilot 
+      + Responsible for configuring the Envoy and Mixer at runtime.
+      + 即负责运行时对 Envoy 和 Mixer 进行配置
+        
+    - Proxy/Envoy
+      + Sidecar proxies per microservice to handle ingress/egress 
+        traffic between services in the cluster and from a service 
+        to external services. The proxies form a secure microservice 
+        mesh providing a rich set of functions like discovery, rich 
+        layer-7 routing, circuit breakers, policy enforcement and 
+        telemetry recording/reporting functions.
+      + 主要用于处理微服务网格中各服务之间通信的
+        
+    - Mixer
+      + Create a portability layer on top of infrastructure backends. 
+        Enforce policies such as ACLs, rate limits, quotas, authentication, 
+        request tracing and telemetry collection at an infrastructure level.
+      + 在后端基础架构之上增加的一层可移植层，实现了在基础架构一层对 ACLs, rate limits,
+        quotas, authentication, request tracing 和 telemetry collection 等
+        策略进行执行；
+        
+    - Citadel / Istio CA
+      + Secures service to service communication over TLS. Providing a key 
+        management system to automate key and certificate generation, 
+        distribution, rotation, and revocation.
+      + 主要用于身份认证等安全机制
+
+    - Ingress/Egress
+      + Configure path based routing for inbound and outbound external traffic.
+      + 主要用于微服务的出入流量管理
+        
+    - Control Plane API
+      + Underlying Orchestrator such as Kubernetes or Hashicorp Nomad.
+      + 控制平面 API
+        
+
+    整体的系统架构如下
+
+    /Users/vampirem/Good_Study/Istio_overall_architectur.png
+    
+** Deploy Sample Application
+   
+    当部署一个将要通过 Istio 进行扩展的应用时，Kubernetes YAML 定义文件需要通过
+    kube-inject 来进行扩展。如
+
+    #+BEGIN_SRC sh
+    kubectl apply -f <(istioctl kube-inject -f samples/bookinfo/platform/kube/bookinfo.yaml)
+    #+END_SRC
+    
+
+** Control Routing
+   
+     Istio 的重要特性之一是流量管理。作为一个微服务架构的温标，需要具备对
+     服务到服务的流量控制特性。
+     
+*** User Based Testing/Request Routing
+    
+      流量管理的一方面是基于 HTTP 请求，如 user agent strings, IP 地址
+      以及 cookies 等来进行流量路由的控制；
+      
+
+*** Traffic Shaping for Canary Releases
+    
+      通过对访问流量进行切分，来实现金丝雀发布
+      
+
+** Istio 中比较常用的 dashboard 可视化工具
+
+     - grafana
+
+       + 返回当前正在被处理的所有请求的数量；
+       + 发生错误的数量
+       + 每个调用请求的应答时间；
+
+     - Jaeger
+       
+       + 对每一个 HTTP 请求进行追踪；
+       + 展示调用了什么；
+       + 请求处理的时间都花费在哪里；
+         
+     - Service Graph
+       
+       + 展示 Istio 系统中各服务连接的依赖树状图
+
+     - Weave Scope
+       
+       + Service Graph 从一个较高的层次展示了系统中各服务连接的概况；而 Weave Scope
+         则提供了一个非常好的视图概览以及针对整个集群的 debug 工具；
+         
+       + 使用 Scope 能够观察到每个 Pod 中都有哪些进程在运行，以及 Pods 之间的彼此
+         连接情况;
+         
+       部署 Weave Scope
+
+       #+BEGIN_SRC sh
+       kubectl create -f 'https://cloud.weave.works/launch/k8s/weavescope.yaml
+       #+END_SRC
+       
+       对外暴露 Weave Scope 服务，使得 Scope 可访问
+       
+       #+BEGIN_SRC sh
+       pod=$(kubectl get pod -n weave --selector=name=weave-scope-app -o jsonpath={.items..metadata.name})
+       kubectl expose pod $pod -n weave --external-ip="172.17.0.44" --port=4040 --target-port=4040
+       #+END_SRC
