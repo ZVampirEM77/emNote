@@ -147,6 +147,27 @@
     
      kubecfg 命令。
 
+     
+** Kubernetes 中的对象
+   
+   在 Kubernetes 中，几乎一切都是对象。常见的对象包括：Node, Pod, Deployment,
+   ReplicationConroller, ReplicaSet 等等。通常可以在描述文件中指定 kind 来
+   创建不同种类的对象。
+   
+   Kubernetes 对象本质上是一种用于持久化的实体，保存在 etcd 中，Kubernetes 使用
+   这些持久化实体来描述一个集群。通常一个 Kubernetes 对象可以包含一下信息：
+
+   - 需要运行的应用以及运行在哪些 Node 上；
+   - 应用可以使用哪些资源；
+   - 应用运行时的一些配置，例如 重启策略，升级以及容错策略；
+     
+   通过创建对象，可以有效地告知 Kubernetes 系统，所需要的集群工作负载看起来是什么样
+   子的，这就是 Kubernetes 集群的 期望状态。
+   
+   每个 Kubernetes 对象包含两个嵌套的对象字段，它们负责管理对象的配置：对象 spec 
+   和 对象 status。spec 必须提供，它描述了对象的 期望状态—— 希望对象所具有的特征。
+   status 描述了对象的 实际状态，它是由 Kubernetes 系统提供和更新。在任何时刻，
+   Kubernetes 控制平面一直处于活跃状态，管理着对象的实际状态以与我们所期望的状态相匹配。
   
 ** 容器技术基础
    
