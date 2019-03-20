@@ -1,0 +1,185 @@
+* 构建 rook 所需 ceph 容器镜像流程
+  
+总体来说，构建 rook 所需的 ceph 容器镜像的过程中会涉及到如下三个容器镜像：
+- daemon-base ( 或者重命名为 ceph-amd64, 以 x86_64 架构为例 )
+- ceph-amd64 ( 通过 rook 进行构建的，依赖于上面的 daemon-base 镜像 )
+- rook/ceph ( 最终通过 rook 部署 ceph 集群所需要使用的镜像 )
+
+** 构建 daemon-base 基础镜像
+   
+daemon-base 镜像是所有 ceph 容器镜像中，最基础的一个，只包含了 ceph 所有的基本组件，如
+mon、osd、mgr、rgw 等服务。
+
+构建过程也非常简单，使用 ceph 社区提供的 ceph-container 项目镜像构建。
+
+获取 ceph-container
+
+#+BEGIN_EXAMPLE
+$ git clone https://github.com/ceph/ceph-container.git
+#+END_EXAMPLE
+
+进入 ceph-container 项目的根目录，执行构建命令
+
+#+BEGIN_EXAMPLE
+$ make FLAVORS=luminous,centos,7 build
+#+END_EXAMPLE
+
+具体构建过程中可以指定的参数，以及相关配置值的含义，可以查看 ceph-container 的文档
+
+https://github.com/ceph/ceph-container
+
+
+
+成功构建后，会生成两个镜像，分别为
+- ceph/dameon
+- ceph/daemon-base
+
+上面说过 daemon-base 镜像只包含了 ceph 所有的基本组件，如 mon、osd、mgr、rgw 等服务。
+daemon 镜像则以 daemon-base 镜像作为基础，加入了对 kubernetes、etcd 等服务的支持。
+
+在构建 rook 所需的 ceph 容器镜像过程中，只需要 daemon-base 镜像作为基础镜像。
+
+
+** 构建中间层容器镜像 ceph/ceph-amd64
+   
+中间镜像 ceph/ceph-amd64 是用于作为构建最终 rook 所需的 ceph 容器镜像的基础镜像。
+它以上面构建得到的 daemon-base 镜像为基础镜像，通过使用 rook 提供的构建方法进行
+构建。
+
+在执行具体构建操作之前，需要进行说明的是，通过查看 rook/images/ceph 目录下的 Makefile
+文件内容，可知，在构建 ceph/ceph-amd64 容器镜像时，是以名为 ceph/ceph-amd64 的镜像
+作为基础镜像，实际上就是上面构建的 daemon-base 容器镜像。ceph/ceph-amd64 实际上是
+ceph 官方社区在 Docker Hub 上面为 daemon-base 容器镜像针对特定的 x86_64 体系架构
+所维护的一个特定体系架构的版本。
+
+#+BEGIN_EXAMPLE
+# ====================================================================================
+# Image Build Options
+
+CEPH_IMAGE = $(BUILD_REGISTRY)/ceph-$(GOARCH)
+
+CEPH_VERSION = v13.2.2-20181023
+BASEIMAGE = ceph/ceph-$(GOARCH):$(CEPH_VERSION)
+
+TEMP := $(shell mktemp -d)
+
+...
+#+END_EXAMPLE
+
+当然此处可以选择修改 Makefile 文件中的 BASEIMAGE 变量为 daemon-base。在我们之前
+的构建过程中，选择了对 daemon-base 镜像进行重命名。
+
+例如，若重命名后的 daemon-base 镜像为
+
+#+BEGIN_EXAMPLE
+$ docker image ls
+106.75.10.10:80/umstor/ceph-amd64                   12.2.5.16                      1ca57bf73a7c        5 days ago          630MB
+...
+#+END_EXAMPLE
+
+则需要修改 rook/images/ceph/Makefile 文件中的相关配置为
+
+#+BEGIN_EXAMPLE
+include ../image.mk
+
+# ====================================================================================
+# Image Build Options
+
+CEPH_IMAGE = $(BUILD_REGISTRY)/ceph-$(GOARCH)
+
+CEPH_VERSION = 12.2.5.16
+BASEIMAGE = 106.75.10.10:80/umstor/ceph-amd64:$(CEPH_VERSION)
+
+TEMP := $(shell mktemp -d)
+
+# ====================================================================================
+# Build Rook
+
+...
+#+END_EXAMPLE
+
+
+具体的构建过程为首先需要下载 rook 源码包到当前系统中的 GOPATH 所指定的目录下的 src/github.com/rook/ 目录下,
+例如，若当前系统的 GOPATH 指定为 /root/go/，则执行
+
+#+BEGIN_EXAMPLE
+$ cd /root/go/src/github.com/rook
+$ git clone https://github.com/rook/rook.git
+#+END_EXAMPLE
+
+
+因为当前 rook 还没有发布 1.0 版本，因此各个 release 版本之间的差别可能会很大，版本之间的差别可能会导致最终部署时
+报出各种奇怪的错误，所以建议若使用的 ceph 源码比较新，则选择使用 release 版本较新的 rook 版本，当前我们使用的
+是最新的 release 版本 v0.9.3 版本。
+
+实际上，在这一步的构建过程当中，是以 daemon-base 作为基础镜像，然后加入了 rook 相关的二进制文件，然后生成一个包含
+rook 相关执行程序的 ceph-amd64 容器镜像。
+
+#+BEGIN_EXAMPLE
+$ git checkout v0.9.3
+#+END_EXAMPLE
+
+
+构建中间阶段的容器镜像 ceph-amd64，在 rook 项目的根目录下，执行
+
+#+BEGIN_EXAMPLE
+$ ./build/run make -j4
+#+END_EXAMPLE
+
+若构建成功，会生成如下的一些镜像
+
+#+BEGIN_EXAMPLE
+$ docker image ls
+build-111dcede/nfs-amd64                                 latest                         9237864cd5e6        23 hours ago        388MB
+build-111dcede/cassandra-amd64                           latest                         a3a63e94157c        23 hours ago        130MB
+build-111dcede/ceph-amd64                                latest                         6b0779ccf975        23 hours ago        698MB
+build-111dcede/edgefs-amd64                              latest                         c5abf6dd7dda        23 hours ago        408MB
+build-111dcede/minio-amd64                               latest                         049cca6d958f        23 hours ago        78.4MB
+build-111dcede/cockroachdb-amd64                         latest                         67601bc891b9        23 hours ago        240MB
+build-111dcede/cross-amd64                               latest                         efdfc750af04        23 hours ago        1.29GB
+cache/cross-amd64                                        2019-03-19.093747              efdfc750af04        23 hours ago        1.29GB
+#+END_EXAMPLE
+
+若只需要构建 ceph 相关的容器镜像，则可以通过指定配置参数 IMAGE 为 ceph 来进行构建
+
+#+BEGIN_EXAMPLE
+./build/run make -j4 IMAGES='ceph'
+#+END_EXAMPLE
+
+
+最终生成的 ceph-amd64 容器镜像，即为我们最终构建 rook 部署所需的 ceph 相关的容器镜像的基础镜像。
+
+
+
+** 构建最终 rook 所需的 ceph 容器镜像
+
+有了上面构建成功的 ceph-amd64 容器镜像之后，就可以构建最终 rook 部署所需的容器镜像 rook/ceph。
+
+这个构建方法实际上是 ceph 官方在 ceph 仓库中进行提供的。
+
+在 ceph 新版本的源码中，在 src/script/ 目录下，会包含一个名为 kubejacker 的目录，就是用来
+构建 rook 所需的容器镜像的。
+
+通过在 ceph/build 目录下执行
+
+#+BEGIN_EXAMPLE
+$ REPO=106.75.10.10:80 sh ../src/script/kubejacker/kubejacker.sh
+#+END_EXAMPLE
+
+即可自动构建生成 rook/ceph 容器镜像，成功构建后会生成如下容器镜像
+
+#+BEGIN_EXAMPLE
+$ docker image ls
+
+REPOSITORY                                               TAG                            IMAGE ID            CREATED             SIZE
+106.75.10.10:80/rook/ceph                            7cf2666                        f485385f36cb        23 hours ago        952MB
+106.75.10.10:80/rook/ceph                            latest                         f485385f36cb        23 hours ago        952MB
+#+END_EXAMPLE
+
+通过查看 kubejacker 目录下的 kubejacker.sh 文件，可以看到
+
+#+BEGIN_EXAMPLE
+DEFAULT_BASEIMAGE="`docker image ls | grep ceph-amd64 | cut -d " " -f 1`"
+#+END_EXAMPLE
+
+实际上就是使用之前生成的 ceph-amd64 镜像作为基础镜像来进行构建。
