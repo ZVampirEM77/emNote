@@ -1,0 +1,29 @@
+* Admin Socket
+  
+Ceph admin socket 允许用户通过 socket 接口来查询一个 daemon 的状态信息。
+
+可以使用如下命令来通过 admin socket 对 daemon 进行访问。
+
+#+BEGIN_EXAMPLE
+ceph daemon {daemon-name}
+ceph daemon {path-to-socket-file}
+#+END_EXAMPLE
+
+如下命令是等价的
+
+#+BEGIN_EXAMPLE
+ceph daemon osd.0 foo
+ceph daemon /var/run/ceph/ceph-osd.0.asok foo
+#+END_EXAMPLE
+  
+CephContext 中会创建一个 AdminSocket 对象，该对象本质是一个线程。ceph-mon/ceph-osd/ceph-mds 这些进程都会有创建
+一个 AdminSocket 的线程，负责响应用户的探查命令。
+
+
+admin socket 命令允许用户在运行时查看和设置 daemon 当前的相关配置信息。
+
+ceph 支持在运行时对 ceph-osd、ceph-mon 和 ceph-mds daemon 的配置进行修改。
+
+#+BEGIN_EXAMPLE
+ceph tell {daemon-type}.{id or *} injectargs --{name} {value} [--{name} {value}]
+#+END_EXAMPLE
