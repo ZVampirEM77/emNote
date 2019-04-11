@@ -94,6 +94,12 @@
      当 Pod 里的某个容器停止时，Kubernetes 会自动检测到这个问题并重新启动这个 Pod (重启 Pod 里的所有
      容器)。如果 Pod 所在 Node 宕机，则会将这个 Node 上所有 Pod 重新调度到其他节点上。
      
+     Note:
+       Pod 中的一个容器停止的话，整个 Pod 会被重启。
+       
+     对应于 Docker Volume 在 Kubernetes 中有对应的概念 -- Pod Volume，Pod Volume 是定义在 Pod
+     层的，然后被各个容器挂载到自己的文件系统中。
+     
      Pod IP + 其中容器的端口 = Pod 的一个 Endpoint
      
      Pod 可以对其能使用的服务器上的计算资源设置限额，支持 CPU 和 内存两种资源
@@ -115,24 +121,368 @@
 *** Replication Controllers ( RC )
     
      主要负责控制在同一时间一起运行的 Pod 的数量。
+     
+     简单来说，RC 其实是定义了一个期望的场景，即声明某种 Pod 的副本数量在任意时刻都符合
+     某个预期值，所以 RC 的定义包括如下几个部分
+
+     - Pod 期待的副本数量 (replicas);
+     - 用于筛选目标 Pod 的 Label Selector;
+     - 当 Pod 的副本数量小于预期数量的时候，用于创建新 Pod 的 Pod 模板 (template);
+       
+     当我们定义了一个 RC 并提交到 Kubernetes 集群中以后，Master 节点上的 Controller Manager
+     组件就得到通知，定期巡检系统中当前存活的目标 Pod, 并确保目标 Pod 实例的数量刚好等于此 RC 的
+     期望值，如果有过多的 Pod 副本在运行，系统就会停掉一些 Pod，否则系统就会在自动创建一些 Pod。
+     
+     在运行时，可以通过修改 RC 的副本数量，来实现 Pod 的动态缩放功能
+
+     #+BEGIN_EXAMPLE
+     kubectl scale rc redis-slave --replicas=3
+     #+END_EXAMPLE
     
+     Note:
+
+     1. 删除 RC 并不会影响通过该 RC 已创建好的 Pod。
+        
+     2. 为了删除所有 Pod，可以设置 replicas 的值为 0 ，然后更新该 RC.
+        
+     3. 通过 RC 的机制，Kubernetes 很容易就实现了这种高级实用的特性，被称为 "滚动升级(Rolling Update)"。
+        
+
+     RC (Replica Set) 的一些特性与作用
+
+     - 在大多数情况下，通过定义一个 RC 实现 Pod 的创建过程及副本数量的自动控制；
+     - RC 里包括完整的 Pod 定义模板；
+     - RC 通过 Label Selector 机制实现对 Pod 副本的自动控制；
+     - 通过改变 RC 里的 Pod 副本数量，可以实现 Pod 的扩容或缩容功能；
+     - 通过改变 RC 里 Pod 模板中的镜像版本，可以实现 Pod 的滚动升级/降级功能；
+
+       
+*** Deployment
+    
+     Deployment 引入的目的是为了更好地解决 Pod 的编排问题。Deployment 在内部使用了 Replica Set(RC)
+     来实现目的，可以把它看做 RC 的一次升级。
+     
+     Deployment 相对于 RC 的一个最大升级是可以随时知道当前 Pod “部署” 的进度。
+     
+     Pod 的部署包括:
+     - 创建
+     - 调度
+     - 绑定节点
+     - 在目标 Node 上启动对应的容器
+       
+     Deployment 的典型使用场景
+     - 创建一个 Deployment 对象来生成对应的 Replica Set 并完成 Pod 副本的创建过程；
+     - 检查 Deployment 的状态来看部署动作是否完成 (Pod 副本的数量是否达到预期的值);
+     - 更新 Deployment 以创建新的 Pod (比如镜像升级);
+     - 如果当前 Deployment 不稳定，则回滚到一个早先的 Deployment 版本;
+     - 挂起或者恢复一个 Deployment;
+       
+     Deployment 的定义与 Replica Set 的定义很类似，除了 API 声明与 Kind 类型等有所区别。
+     
+     Deployment 实际上是一个两层控制器，首先，其通过 ReplicaSet 的个数来描述应用的版本；
+     然后，再通过 ReplicaSet 的属性 (如 replicas 的值)，来保证 Pod 的副本数量。
+     
+     即，Deployment 控制 ReplicaSet (版本)，ReplicaSet 控制 Pod (副本数).
+     
+**** 滚动升级
+     
+      将一个集群中正在运行的多个 Pod 版本，交替地逐一升级的过程，就是 “滚动更新”。
+
+      滚动升级的过程是先创建新版的 pod，将流量导入到新的 Pod 上后，销毁原来的旧的 pod。
+      
+      滚动更新的好处是，比如，在升级刚开始的时候，集群里只有 1 个新版本的 Pod。如果这时，新版本 Pod 有问题启动失败，
+      那么 "滚动更新" 就会停止，从而允许开发和运维人员介入。而这个过程中，由于应用本身还有两个旧版本的 Pod 在线，所以
+      服务并不会受到太大的影响。
+      
+      为了保证服务的连续性，Deployment Controller 还会确保，在任何时间窗口内，只有指定比例的 Pod 处于离线状态，
+      同时，也会确保，在任何时间窗口内，只有指定比例的新 Pod 被创建出来。
+      
+      Deployment 控制器实际上控制的是 ReplicaSet 的数目，以及每个 ReplicaSet 的属性。
+      
+      一个应用的版本对应的正是一个 ReplicaSet；这个版本应用的 Pod 数量，则由 ReplicaSet 通过其自己的控制器
+      (ReplicaSet Controller) 来保证；
+      
+      应用版本和 ReplicaSet 一一对应，是 Kubernetes 的重要设计思想之一。
+      
+      查看滚动更新的进度状态
+
+      #+BEGIN_EXAMPLE
+      $ kubectl rollout status deployment/nginx-deployment
+        Waiting for rollout to finish: 2 out of 3 new replicas have been updated...
+        deployment.extensions/nginx-deployment successfully rolled out
+      #+END_EXAMPLE
+
+
 
 *** Services 服务
     
      一个 Kubernetes 服务是容器组逻辑的高级抽象，同时也对外提供访问容器组的策略。
+     
+     RC 的作用是保证 Service 的服务能力和服务质量始终处于预期的标准。
+     
+     运行在每个 Node 上的 kube-proxy 进程其实就是一个软件负载均衡器，负责把对 Service 的请求转发到
+     后端的某个 Pod 实例上，并在内部实现服务的负载均衡与会话保持机制。
+
+     Kubernetes 发明了一种非常巧妙又影响深远的设计: Service 不是共用一个负载均衡器的 IP 地址，而是
+     每个 Service 分配了一个全局唯一的虚拟 IP 地址，即 Cluster IP，每个服务都具备唯一的 IP 地址。Pod
+     的 Endpoint 地址会随着 Pod 的销毁和重新创建而发生改变，新 Pod 的 IP 地址与之前旧的 Pod 的不同。
+     而 Service 一旦创建，在整个生命周期内，Cluster IP 不会发生改变，因此，*服务发现* 这个棘手的问题
+     就被解决了，只要用 Service 的 Name 与 Cluster IP 地址做一个 DNS 域名映射就可解决。
+     
+     大部分的分布式系统都是通过提供特定的 API 接口来实现服务发现的功能。这样做会导致平台的侵入性比较强，
+     也增加了开发测试的难度。
+     
+     Kubernetes 通过 Add-On 增值包的方式引入了 DNS 系统，把服务名作为 DNS 域名，程序就可以
+     直接使用服务名来建立通信连接了。
+     
+     Service 的 Cluster IP 属于 Kubernetes 集群内部的地址，无法在集群外部直接使用这个地址。
+     如果服务要提供给外部应用使用和访问，需要使用 NodePort 来解决外部访问的问题。
+     
+     NodePort 的实现方式是在 Kubernetes 集群里的每个 Node 上为需要外部访问的 Service 开启
+     一个对应的 TCP/IP 监听端口，外部系统只要用任意一个 Node 的 IP 地址 + 具体的 NodePort
+     端口号，即可访问此服务。
+     
+     通过 NodePort 解决外部访问的方案，存在的问题是：负载均衡问题。理想的情况是，有一个负载均衡器，
+     外部的请求只需要访问此负载均衡器的 IP 地址，由负载均衡器负责转发流量到后面某个 Node 的
+     NodePort 上。
+     
+
+**** Kubernetes 中的三种 IP
+
+      - Node IP
+        
+        Node 节点的 IP 地址。
+        
+        Node IP 是 Kubernetes 集群中每个节点的物理网卡的 IP 地址，这是一个真实存在的物理网络，
+        所有属于这个网络的服务器之间都能通过这个网络直接通信。
+        
+        Kubernetes 集群之外的节点访问 Kubernetes 集群之内的某个节点或者 TCP/IP 服务时，必须
+        要通过 Node IP 进行通信.
+
+
+      - Pod IP
+        
+        Pod 的 IP 地址。
+        
+        Pod IP 是 Docker Engine 根据 docker0 网桥的 IP 地址段进行分配的，通常是一个虚拟的
+        二层网络。Kubernetes 中位于不同 Node 上的 Pod 能够彼此直接通信，一个 Pod 里的容器
+        访问另外一个 Pod 里的容器，就是通过 Pod IP 所在的虚拟二层网络进行通信的，而真实的
+        TCP/IP 流量则是通过 Node IP 所在的物理网卡流出的。
+
+
+      - Cluster IP
+        
+        Service 的 IP 地址。
+        
+        + Cluster IP 仅仅作用于 Kubernetes Service 对象，并由 Kubernetes 管理和分配 
+          IP 地址 (来源于 Cluster IP 地址池);
+        + Cluster IP 无法被 ping，因为没有一个 "实体网络对象" 来响应；
+        + Cluster IP 只能结合 Service Port 组成一个具体的通信端口，单独的 Cluster IP 
+          不具备 TCP/IP 通信的基础，并且它们属于 Kubernetes 集群这样一个封闭的空间，集群
+          外的节点如果要访问这个通信端口，需要做一些额外的工作。
+        + Kubernetes 集群内，Node IP 网、Pod IP 网与 Cluster IP 网之间的通信，采用的
+          是 Kubernetes 自己设计的一种编程方式的特殊的路由规则。
+
 
 
 *** volumes 卷
     
      一个卷就是一个目录，容器对其有访问权限
+     
+     - Kubernetes 中的 Volume 定义在 Pod 上，被一个 Pod 里的多个容器挂载到具体的文件目录下。
+     - Kubernetes 中的 Volume 与 Pod 的生命周期相同，但与容器的生命周期不相关，当容器终止或者
+       重启时，Volume 中的数据不会丢失。 
+       
+**** emptyDir
+
+       一个 emptyDir Volume 是在 Pod 分配到 Node 时创建的。它的初始内容为空，并且无需指定
+       宿主机上对应的目录文件，因为这是 Kubernetes 自动分配的一个目录，当 Pod 从 Node 上移除
+       时，emptyDir 中的数据也会被永久删除。
+       
+       emptyDir 的用处如下：
+       + 临时空间，例如用于某些应用程序运行时所需的临时目录，且无须永久保留；
+       + 长时间任务的中间过程 CheckPoint 的临时保存目录；
+       + 一个容器需要从另一个容器中获取数据的目录 (多容器共享目录)；
+         
+       当前，用户无法控制 emptyDir 使用的介质种类。
+
+       将来，可以支持设置 Pod 的 emptyDir 是位于硬盘、固态硬盘还是基于内存的 tmpfs 上。
  
+       
+
+**** hostPath
+
+       hostPath 为在 Pod 上挂载宿主机上的文件或目录，通常可用于以下几方面：
+
+       + 容器应用程序生成的日志文件需要永久保存时，可以使用宿主机的高速文件系统进行存储；
+       + 需要访问宿主机上 Docker 引擎内部数据结构的容器应用时，可以通过定义 hostPath
+         为宿主机 /var/lib/docker 目录，使容器内部应用可以直接访问 Docker 的文件系统。
+         
+       在使用这种类型的 Volume 时，需要注意：
+
+       + 在不同的 Node 上具有相同配置的 Pod 可能会因为宿主机上的目录和文件不同而导致
+         对 Volume 上目录和文件的访问结果不一致；
+       + 如果使用了资源配额管理，则 Kubernetes 无法将 hostPath 在宿主机上使用的资源
+         纳入管理。
+         
+       下面的例子使用宿主机的 /data 目录定义了一个 hostPath 类型的 Volume
+
+       #+BEGIN_EXAMPLE
+       volumes:
+       - name: "presistent-storage"
+         hostPath:
+           path: "/data"
+       #+END_EXAMPLE
+       
+
+**** gcePersistentDisk
+     
+       表示使用谷歌公有云提供的永久磁盘 (Persistent Disk, PD) 存放 Volume 的数据。
+       
+
+**** awsElasticBlockStore
+
+       表示使用 AWS 公有云提供的 EBS Volume 存储数据
+
+       
+**** NFS
+
+       使用 NFS 网络文件系统提供的共享目录存储数据时，需要在系统中部署一个 NFS Server。
+       定义 NFS 类型的 Volume 示例如下：
+
+       #+BEGIN_EXAMPLE
+       volumes:
+         - name: nfs
+           nfs:
+             server: nfs-server.localhost
+             path: "/"
+       #+END_EXAMPLE
+
+       
+*** Persistent Volume
     
+     Persistent Volume (简称 PV)，可以理解成 Kubernetes 集群中的某个网络存储中对应的一块存储，
+     与 Volume 很类似，但有如下区别：
+
+     - PV 只能是网络存储，不属于任何 Node, 但可以在每个 Node 上访问；
+     - PV 并不是定义在 Pod 上的，而是独立于 Pod 之外定义；
+     - PV 目前只有几种类型：GCE Persistent Disks、NFS、RBD、iSCSI、AWS EBS、GlusterFS
+       
+     例如一个 NFS 类型 PV 的一个 yaml 定义文件，声明了需要 5G 的存储空间：
+
+     #+BEGIN_EXAMPLE
+     apiVersion: v1
+     kind: PersistentVolume
+     metadata:
+       name: pv003
+     spec:
+       capacity:
+         storage: 5Gi
+       accessModes:
+         - ReadWriteOnce
+       nfs:
+         path: /somepath
+         server: 172.17.0.2
+     #+END_EXAMPLE
+     
+     PV 的 accessMode 属性当前有如下类型：
+
+     - ReadWriteOnce: 读写权限，并且只能被单个 Node 挂载；
+     - ReadOnlyMany: 只读权限，允许被多个 Node 挂载；
+     - ReadWriteMany: 读写权限，允许被多个 Node 挂载；
+       
+     如果某个 Pod 想申请某种条件的 PV，则需要首先定义一个 Persistent Volume Claim (简称 PVC) 对象。
+     
+     #+BEGIN_EXAMPLE
+     kind: PersistentVolumeClaim
+     apiVersion: v1
+     metadata:
+       name: myclaim
+     spec:
+       accessModes:
+         - ReadWriteOnce
+       resources:
+         requests:
+           storage: 8Gi
+     #+END_EXAMPLE
+     
+     然后在 Pod 的 Volume 定义中引用上述 PVC 即可：
+
+     #+BEGIN_EXAMPLE
+     volumes:
+       - name: mypd
+         persistentVolumeClaim:
+           claimName: myclaim
+     #+END_EXAMPLE
+     
+     PV 是有状态的对象，有如下几种状态：
+
+     - Available: 空闲状态；
+     - Bound: 已经绑定到某个 PVC 上；
+     - Released: 对应的 PVC 已经删除，但资源还没有被集群收回；
+     - Failed: PV 自动回收失败；
+     
+     
+
+     
+*** Namespace (命名空间)
+    
+      Kubernetes 集群在启动后，会创建一个名为 "default" 的 Namespace。
+      
+      如果不特别指明 Namespace, 则用户创建的 Pod、RC、Service 都将被系统创建到这个
+      默认的名为 default 的 Namespace 下。
+      
+      Namespace 的定义非常简单，如创建一个名为 development 的 Namespace
+
+      #+BEGIN_EXAMPLE
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: busybox
+      #+END_EXAMPLE
+    
+
 *** labels 标签
     
      标签是用来连接一组对象的，比如容器组。标签可以被用来组织和选择子对象。
      
+     一个 Label 是一个 key=value 键值对。Label 可以附加到各种资源对象上，如 Node, Pod, Service, RC 等,
+     一个资源对象可以定义任意数量的 Label, 同一个 Label 也可以被添加到任意数量的资源对象上。
 
+     Label 可以在资源对象定义时确定，也可以在对象创建后，动态添加或者删除。
+     
+     Label Selector 在 Kubernetes 中的重要使用场景有如下：
+
+     - kube-controller 进程通过资源对象 RC 上定义的 Label Selector 来筛选要监控的 Pod 副本的数量，
+       从而实现 Pod 副本的数量始终符合预期设定的全自动控制流程。
+
+     - kube-proxy 进程通过 Service 的 Label Selector 来选择对应的 Pod，自动建立起每个 Service
+       到对应 Pod 的请求转发路由表，从而实现 Service 的智能负载均衡机制。
+
+     - 通过对某些 Node 定义特定的 Label，并且在 Pod 定义文件中使用 NodeSelector 这种标签调度策略，
+       kube-scheduler 进程可以实现 Pod "定向调度" 的特性。
     
+     使用 Label 可以给对象创建多组标签，Label 和 Label Selector 共同构成了 Kubernetes 系统中最核心的
+     应用模型，使得被管理对象能够被精细地分组管理，同时实现了整个集群的高可用性。       
+ 
+     
+*** Annotation 注释
+
+      与 Label 类似，也使用键值对的形式进行定义。
+ 
+      Annotation 可以支持用户任意定义 "附加" 信息，以便于外部工具进行查找。
+      很多时候，Kubernetes 的模块自身会通过 Annotation 的方式标记资源对象
+      的一些特殊信息。
+      
+      通常，用 Annotation 来记录的信息如下：
+
+      - build 信息、release 信息、Docker 镜像信息等，例如时间戳、release id 号、
+        PR 号、镜像 hash 值、docker registry 地址等；
+      - 日志库、监控库、分析库等资源库的地址信息；
+      - 程序调试工具信息，例如 工具名称、版本号等；
+      - 团队的联系信息，例如电话号码、负责人名称、网址等；
+
+
 *** 接口权限 (accessing_the_api)
     
      端口，ip 地址和代理的防火墙规则。
@@ -169,6 +519,41 @@
    status 描述了对象的 实际状态，它是由 Kubernetes 系统提供和更新。在任何时刻，
    Kubernetes 控制平面一直处于活跃状态，管理着对象的实际状态以与我们所期望的状态相匹配。
   
+   
+** Kubernetes 网络模型
+   
+    Kubernetes 对容器网络的处理方法为，通过一个叫做 CNI 的接口，来替代 docker0 作为与
+    容器连通的网桥设备，然后采用网络插件，把不同宿主机上的特殊网络设备连通，从而达到容器
+    跨主机通信的目的。
+    
+    CNI 网桥在宿主机上的设备名称默认为：cni0.
+    
+    Kubernetes 之所以要设置一个与 docker0 网桥功能几乎一样的 CNI 网桥，主要原因包括
+    两个方面：
+    - Kubernetes 项目并没有使用 Docker 的网络模型 (CNM)，所以它并不希望、也不具备
+      配置 docker0 网桥的能力；
+    - 这与 Kubernetes 如何配置 Pod，也就是 Infra 容器的 Network Namespace 密切相关；
+
+*** Kubernetes Host 网络模式应用
+    
+     实际生产环境中，有些容器内应用需要用到物理层面的网络资源，这就需要 Kubernetes 以 Host 模式
+     来启动 Pod.
+        
+     
+**** Pod 网络
+
+      每个 Pod 都会默认启动一个 pod-infrastructure (或 pause) 的容器，作为共享网络的基准容器。
+      其他业务容器启动后，会将自己的网络模式指定为 "NetworkMode: container:pause_containerID"。
+      这样就能做到 Pod 中的所有容器网络都是共享的。
+      
+      在 Kubernetes 的网络模型中，每一个 Pod 都拥有一个扁平化共享网络命名空间的 IP，称为 Pod IP。
+      通过 Pod IP，Pod 能够跨网络与其他物理机和容器进行通信。
+      
+      也可以设置 Pod 为 Host 网络模式，即直接使用宿主机的网络，不进行网络虚拟化隔离。这样，Pod 中的
+      所有容器就直接暴露在宿主机的网络环境中，Pod 的 Pod IP 就是其所在 Node 的 IP。实际上，是将 Pod
+      中的 Pod-pause 容器的网络设置为 Host，其他业务容器因为网络指向该容器，因此，也直接使用宿主机网络。
+
+
 ** 容器技术基础
    
     Docker 容器这个听起来玄而又玄的概念，实际上是在创建容器进程时，指定了这个进程所需要的一组 Namespace 参数。
@@ -342,6 +727,11 @@
       它对应的层也会存在。只不过在外界看来，这个层是空的。
 
       
+      
+*** 容器的跨主通信
+
+      Fannel 正是用于解决容器跨主通信问题的 SDN 解决方案
+
 
 ** Kubernetes 集群的搭建与实践
    
@@ -820,6 +1210,53 @@
  
 
    
+   
+
+** 配置 Kubernetes 访问私有 docker 镜像仓库
+   
+*** 首先登陆 docker 镜像仓库
+
+      #+BEGIN_SRC sh
+      $ docker login 106.75.118.71:8888
+      #+END_SRC
+ 
+      之后，就可以在配置文件中查看登录情况
+
+      #+BEGIN_EXAMPLE
+      cat ~/.docker/config.json
+      #+END_EXAMPLE
+      
+      Note:
+
+        此时虽然可以通过 docker pull 命令拉取镜像，但无法通过 k8s 创建 pod 方式拉取
+
+
+*** 生成密钥 secret
+    
+      在 master 节点上执行
+    
+      #+BEGIN_EXAMPLE
+      kubectl create secret docker-registry umregsecret --docker-server=106.75.118.71:8888 --docker-username=xxx --docker-password=xxx --docker-email=xxx
+      #+END_EXAMPLE
+      
+      其中
+         regsecret:  指定密钥的键名称, 可自行定义
+         --docker-server:  指定docker仓库地址
+         --docker-username:  指定docker仓库账号
+         --docker-password:  指定docker仓库密码
+         --docker-email:  指定邮件地址(选填)
+         
+      获取当前系统中的密钥
+
+      #+BEGIN_EXAMPLE
+      kubectl get secret
+      
+      NAME                  TYPE                                  DATA   AGE
+      default-token-db5jq   kubernetes.io/service-account-token   3      41d
+      umregsecret           kubernetes.io/dockerconfigjson        1      12m
+      #+END_EXAMPLE
+
+
 
 * Kubernetes 权威指南
 
@@ -1130,6 +1567,47 @@
   再次在本地浏览器中访问 http://192.168.2.16:30001/demo/ ，成功了。
   
 
+  
+
+* Kubernetes Ingress
+  
+使用 service 的 Nodeport 进行服务端口暴露的缺点是：
+- 一个 app 需要占用一个主机端口；
+- 端口缺乏管理；
+- L4 转发，无法根据 http header 和 path 进行路由转发；
+  
+增加一层 ingress 的优点:
+- 增加了 7 层的识别能力，可以根据 http header, path 进行路由转发。
+  
+ingress 的实现分为两部分 ingress controller 和 ingress。
+1. ingress controller 是流量的入口，是一个实体软件，一般是 nginx 和 haproxy；
+2. ingress 描述具体的路由规则，以 ingress 资源的形式存在；
+  
+Ingress Controller 主要实现基于不同的 HTTP URL 向后转发的负载分发规则。
+
+在 K8S 中，Ingress Controller 将以 Pod 的形式运行，监控 apiserver 的 /ingresses
+接口后端的 backend services，如果 service 发生变化，则 Ingress Controller 应
+自动更新其转发规则。
+
+Ingress Controller 的注意事项：
+- 一个集群可以有多个 ingress controller，在 ingress 中可以指定使用哪一个 ingress controller
+- 多个 ingress 规则可能出现竞争；
+- ingress controller 本身需要以 hostport 或者 service 的形式暴露出来；
+- ingress 可以为多个命名空间服务；
+
+
+使用 nginx 来实现一个 Ingress Controller，需要实现的基本逻辑如下：
+- 监听 apiserver，获取全部 ingress 的定义；
+- 基于 ingress 的定义，生成 nginx 所需的配置文件 /etc/nginx/nginx.conf；
+- 执行 nginx -s reload 命令，重新加载 nginx.conf 配置文件的内容；
+  
+
+** 需求和供给分离的优点
+
+1. Ingress Controller 放在独立命名空间中，由管理员来管理；
+2. Ingress 放在各应用的命名空间中，由应用运维来设置；
+
+可以实现权限的隔离，又可以提供配置能力。
 
 * Reference
 
